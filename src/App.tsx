@@ -157,66 +157,75 @@ function PressableButton({
 })();
 
 export default function App() {
+  const [workout, setWorkout] = useState<Workout>(newWorkout());
+  const [tick, setTick] = useState(0);
+
+  // Screen wake lock (best-effort)
   const wakeLockRef = useRef<any>(null);
 
   async function requestWakeLock() {
     try {
-      // Best-effort: supported in many Chromium browsers and some Safari versions.
-      // If unsupported, this will throw and we simply continue without wake lock.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const wl: any = (navigator as any).wakeLock;
       if (!wl?.request) return;
       wakeLockRef.current = await wl.request("screen");
-
-      // If the lock is released (e.g., app backgrounded), try to re-acquire when visible again.
-      wakeLockRef.current.addEventListener?.("release", () => {
+      wakeLockRef.current?.addEventListener?.("release", () => {
         wakeLockRef.current = null;
       });
     } catch {
-      // Ignore – not supported or user gesture requirement not met.
+      // ignore
     }
   }
 
   async function releaseWakeLock() {
     try {
-      if (wakeLockRef.current?.release) {
-        await wakeLockRef.current.release();
-      }
+      if (wakeLockRef.current?.release) await wakeLockRef.current.release();
     } catch {
-      // Ignore
+      // ignore
     } finally {
       wakeLockRef.current = null;
     }
   }
 
-  // Prevent iOS-style double-tap to zoom + reduce accidental zoom while timing
+  // Prevent iOS double-tap zoom + gesture zoom (best effort)
   useEffect(() => {
     let lastTouchEnd = 0;
     const onTouchEnd = (e: TouchEvent) => {
       const nowTs = Date.now();
-      if (nowTs - lastTouchEnd <= 300) {
-        e.preventDefault();
-      }
+      if (nowTs - lastTouchEnd <= 300) e.preventDefault();
       lastTouchEnd = nowTs;
     };
-
-    const onGestureStart = (e: Event) => {
-      // Prevent pinch/gesture zoom where supported.
-      e.preventDefault();
-    };
+    const onGestureStart = (e: Event) => e.preventDefault();
 
     document.addEventListener("touchend", onTouchEnd, { passive: false });
-    // Some Safari builds still fire gesturestart.
     document.addEventListener("gesturestart", onGestureStart as any, { passive: false } as any);
-
     return () => {
       document.removeEventListener("touchend", onTouchEnd as any);
       document.removeEventListener("gesturestart", onGestureStart as any);
     };
   }, []);
 
-  const [workout, setWorkout] = useState<Workout>(newWorkout());
-  const [tick, setTick] = useState(0);
+  // Full-screen layout on phone sizes
+  const [vw, setVw] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 999));
+  useEffect(() => {
+    const onResize = () => setVw(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const isPhoneLayout = vw <= 430;
+
+  const cardBase = useMemo(() => {
+    if (!isPhoneLayout) return styles.card;
+    return {
+      ...styles.card,
+      maxWidth: "100%",
+      minHeight: "100vh",
+      borderRadius: 0,
+      paddingTop: "calc(18px + env(safe-area-inset-top))",
+      paddingBottom: "calc(18px + env(safe-area-inset-bottom))",
+      paddingLeft: "calc(18px + env(safe-area-inset-left))",
+      paddingRight: "calc(18px + env(safe-area-inset-right))",
+    };
+  }, [isPhoneLayout]);
 
   // Only tick while workout is running
   useEffect(() => {
@@ -233,18 +242,14 @@ export default function App() {
 
   const phaseElapsed = useMemo(() => {
     if (workout.endTime) return 0;
-    if (workout.phase === "IN_SET" && workout.active.setStart != null)
-      return now() - workout.active.setStart;
-    if (workout.phase === "IN_REST" && workout.active.restStart != null)
-      return now() - workout.active.restStart;
+    if (workout.phase === "IN_SET" && workout.active.setStart != null) return now() - workout.active.setStart;
+    if (workout.phase === "IN_REST" && workout.active.restStart != null) return now() - workout.active.restStart;
     return 0;
   }, [workout, tick]);
 
   function startWorkout() {
     if (workout.startTime) return;
-    // Keep screen awake during an active workout (best-effort)
     requestWakeLock();
-
     setWorkout({
       ...workout,
       startTime: now(),
@@ -365,7 +370,7 @@ export default function App() {
       ...w,
       exercises,
       currentExerciseIndex: exercises.length - 1,
-      exerciseStartTime: null, // don't start until Start Set
+      exerciseStartTime: null,
       phase: "READY",
       active: { setStart: null, restStart: null },
     });
@@ -412,7 +417,6 @@ export default function App() {
     w.endTime = now();
 
     setWorkout(w);
-    // Stop keeping the screen awake once workout finishes
     releaseWakeLock();
   }
 
@@ -424,11 +428,11 @@ export default function App() {
 
   const primaryAction = (() => {
     if (!workout.startTime || workout.endTime) return null;
-    if (workout.phase === "READY") return { label: "Start Set", action: startSet, type: "start" };
+    if (workout.phase === "READY") return { label: "Start Set", action: startSet, type: "start" as const };
     if (workout.phase === "IN_SET")
-      return { label: "End Set → Start Rest", action: endSetStartRest, type: "set" };
+      return { label: "End Set → Start Rest", action: endSetStartRest, type: "set" as const };
     if (workout.phase === "IN_REST")
-      return { label: "End Rest → Start Set", action: endRestStartSet, type: "rest" };
+      return { label: "End Rest → Start Set", action: endRestStartSet, type: "rest" as const };
     return null;
   })();
 
@@ -441,7 +445,7 @@ export default function App() {
 
     return (
       <div style={styles.shell}>
-        <div style={{ ...styles.card, boxShadow: styles.card.boxShadow }}>
+        <div style={{ ...cardBase, boxShadow: styles.card.boxShadow }}>
           <h1 style={{ margin: 0 }}>Summary</h1>
           <div style={{ marginTop: 4, opacity: 0.75, fontSize: 13 }}>
             Total time in gym: <strong>{msToClock(totals.gymMs)}</strong>
@@ -483,14 +487,7 @@ export default function App() {
                 <div key={ex.id} style={styles.exerciseCard}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                     <div style={{ fontWeight: 800 }}>{ex.name}</div>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "flex-end",
-                        gap: 2,
-                      }}
-                    >
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
                       <div style={{ opacity: 0.7, fontSize: 12 }}>{ex.sets.length} sets</div>
                       <div
                         style={{
@@ -560,7 +557,7 @@ export default function App() {
 
   return (
     <div style={styles.shell}>
-      <div style={{ ...styles.card, boxShadow: cardShadow }}>
+      <div style={{ ...cardBase, boxShadow: cardShadow }}>
         <div style={styles.topHeader}>
           <div style={styles.topStat}>
             <div style={styles.topLabel}>Exercise Time</div>
@@ -579,9 +576,7 @@ export default function App() {
         <div style={{ ...styles.phaseLabel, color }}>{label}</div>
 
         <div style={styles.phaseTimerWrap}>
-          <div style={styles.phaseTimerValue}>
-            {phase === "READY" ? "0:00" : msToClock(phaseElapsed)}
-          </div>
+          <div style={styles.phaseTimerValue}>{phase === "READY" ? "0:00" : msToClock(phaseElapsed)}</div>
         </div>
 
         {primaryAction && (
@@ -603,10 +598,7 @@ export default function App() {
           Next Exercise
         </PressableButton>
 
-        <PressableButton
-          style={styles.secondary}
-          onClick={workout.startTime ? finishWorkout : startWorkout}
-        >
+        <PressableButton style={styles.secondary} onClick={workout.startTime ? finishWorkout : startWorkout}>
           {workout.startTime ? "Finish Workout" : "Start Workout"}
         </PressableButton>
       </div>
@@ -618,13 +610,13 @@ const styles: Record<string, any> = {
   shell: {
     minHeight: "100vh",
     display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: "stretch",
+    justifyContent: "stretch",
     background: "#0b0b0f",
     color: "white",
     fontFamily:
       "-apple-system, BlinkMacSystemFont, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
-    padding: 18,
+    padding: 0,
   },
   card: {
     width: "100%",
@@ -775,8 +767,6 @@ const styles: Record<string, any> = {
     border: "1px solid rgba(255,255,255,0.06)",
     padding: 10,
   },
-
-  // Fixed columns for pixel-perfect alignment
   totalsGrid: {
     display: "grid",
     gridTemplateColumns: "54px 92px 92px",
@@ -823,7 +813,6 @@ const styles: Record<string, any> = {
     justifySelf: "end",
     textAlign: "right",
   },
-
   setRow: {
     display: "grid",
     gridTemplateColumns: "54px 92px 92px",
@@ -850,7 +839,6 @@ const styles: Record<string, any> = {
     justifySelf: "end",
     textAlign: "right",
   },
-
   percentRow: {
     display: "flex",
     flexDirection: "column",
