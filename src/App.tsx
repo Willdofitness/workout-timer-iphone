@@ -66,8 +66,24 @@ function getGlowBoxShadow(phase: Phase, fallback = "0 0 0 rgba(0,0,0,0)") {
 }
 
 function getSetCountForDisplay(workout: Workout) {
-  // Starts at Set 0 and only increments when user taps End Set.
-  return workout.exercises[workout.currentExerciseIndex].sets.length;
+  const sets = workout.exercises[workout.currentExerciseIndex].sets;
+  const last = sets[sets.length - 1];
+  if (workout.phase === "IN_SET") return isActiveSetLog(last) ? sets.length : sets.length + 1;
+  return sets.length;
+}
+
+function isPreSetRest(set: SetLog | undefined) {
+  return Boolean(
+    set &&
+      set.setStart == null &&
+      set.setEnd == null &&
+      set.restStart != null &&
+      set.restEnd == null
+  );
+}
+
+function isActiveSetLog(set: SetLog | undefined) {
+  return Boolean(set && set.setStart != null && set.setEnd == null);
 }
 
 function calcTotals(workout: Workout) {
@@ -281,12 +297,17 @@ export default function App() {
     const sets = [...ex.sets];
     const t = now();
 
-    sets.push({
-      setStart: workout.active.setStart,
-      setEnd: t,
-      restStart: t,
-      restEnd: null,
-    });
+    const last = sets[sets.length - 1];
+    if (isActiveSetLog(last)) {
+      sets[sets.length - 1] = { ...last, setEnd: t, restStart: t, restEnd: null };
+    } else {
+      sets.push({
+        setStart: workout.active.setStart,
+        setEnd: t,
+        restStart: t,
+        restEnd: null,
+      });
+    }
 
     const exercises = [...workout.exercises];
     exercises[workout.currentExerciseIndex] = { ...ex, sets };
@@ -308,7 +329,9 @@ export default function App() {
 
     const t = now();
     const last = sets[sets.length - 1];
-    sets[sets.length - 1] = { ...last, restEnd: t };
+    sets[sets.length - 1] = isPreSetRest(last)
+      ? { ...last, setStart: t, restEnd: t }
+      : { ...last, restEnd: t };
 
     const exercises = [...workout.exercises];
     exercises[workout.currentExerciseIndex] = { ...ex, sets };
@@ -324,20 +347,25 @@ export default function App() {
   function nextExercise() {
     if (!workout.startTime || workout.endTime) return;
 
-    let w: Workout = { ...workout };
+    const w: Workout = { ...workout };
+    const t = now();
 
     // Force-finish any active timing before moving on
     if (w.phase === "IN_SET") {
       const ex = w.exercises[w.currentExerciseIndex];
       const sets = [...ex.sets];
-      const t = now();
 
-      sets.push({
-        setStart: w.active.setStart ?? t,
-        setEnd: t,
-        restStart: null,
-        restEnd: null,
-      });
+      const last = sets[sets.length - 1];
+      if (isActiveSetLog(last)) {
+        sets[sets.length - 1] = { ...last, setEnd: t };
+      } else {
+        sets.push({
+          setStart: w.active.setStart ?? t,
+          setEnd: t,
+          restStart: null,
+          restEnd: null,
+        });
+      }
 
       const exercises = [...w.exercises];
       exercises[w.currentExerciseIndex] = { ...ex, sets };
@@ -348,7 +376,6 @@ export default function App() {
       const ex = w.exercises[w.currentExerciseIndex];
       const sets = [...ex.sets];
       if (sets.length > 0) {
-        const t = now();
         const last = sets[sets.length - 1];
         sets[sets.length - 1] = { ...last, restEnd: last.restEnd ?? t };
         const exercises = [...w.exercises];
@@ -363,36 +390,41 @@ export default function App() {
     exercises.push({
       id: `ex-${exercises.length + 1}`,
       name: `Exercise ${exercises.length + 1}`,
-      sets: [],
+      sets: [{ setStart: null, setEnd: null, restStart: t, restEnd: null }],
     });
 
     setWorkout({
       ...w,
       exercises,
       currentExerciseIndex: exercises.length - 1,
-      exerciseStartTime: null,
-      phase: "READY",
-      active: { setStart: null, restStart: null },
+      exerciseStartTime: t,
+      phase: "IN_REST",
+      active: { setStart: null, restStart: t },
     });
   }
 
   function finishWorkout() {
     if (!workout.startTime || workout.endTime) return;
 
-    let w: Workout = { ...workout };
+    const w: Workout = { ...workout };
 
     if (w.phase === "IN_SET") {
       const ex = w.exercises[w.currentExerciseIndex];
       const sets = [...ex.sets];
       const t = now();
 
-      // End lifting AND auto-add rest of 0:00 for consistency
-      sets.push({
-        setStart: w.active.setStart ?? t,
-        setEnd: t,
-        restStart: t,
-        restEnd: t,
-      });
+      const last = sets[sets.length - 1];
+      if (isActiveSetLog(last)) {
+        sets[sets.length - 1] = { ...last, setEnd: t };
+      } else {
+        // End lifting AND auto-add rest of 0:00 for consistency
+        sets.push({
+          setStart: w.active.setStart ?? t,
+          setEnd: t,
+          restStart: t,
+          restEnd: t,
+        });
+      }
 
       const exercises = [...w.exercises];
       exercises[w.currentExerciseIndex] = { ...ex, sets };
@@ -554,6 +586,11 @@ export default function App() {
   const color = getPhaseColor(phase);
   const cardShadow = getGlowBoxShadow(phase, styles.card.boxShadow);
   const setCount = getSetCountForDisplay(workout);
+  const currentExercise = workout.exercises[workout.currentExerciseIndex];
+  const currentSet = currentExercise.sets[currentExercise.sets.length - 1];
+  const exerciseHeading = isPreSetRest(currentSet)
+    ? `Exercise ${workout.currentExerciseIndex + 1}`
+    : `Exercise ${workout.currentExerciseIndex + 1} — Set ${setCount}`;
 
   return (
     <div style={styles.shell}>
@@ -572,7 +609,7 @@ export default function App() {
 
         <hr style={{ opacity: 0.2 }} />
 
-        <div style={styles.exerciseLine}>{`Exercise ${workout.currentExerciseIndex + 1} — Set ${setCount}`}</div>
+        <div style={styles.exerciseLine}>{exerciseHeading}</div>
         <div style={{ ...styles.phaseLabel, color }}>{label}</div>
 
         <div style={styles.phaseTimerWrap}>
